@@ -209,6 +209,35 @@ app.post('/api/mobilize/pagar', async (req, res) => {
   }
 });
 
+// ── Proxy Telegram (oculta el token del frontend) ────────────────────────────
+const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
+
+app.post('/api/tg/send', async (req, res) => {
+  try {
+    const { text, reply_markup } = req.body;
+    const body = { chat_id: TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true };
+    if (reply_markup) body.reply_markup = reply_markup;
+    const r = await axios.post(`${TG_API}/sendMessage`, body);
+    res.json(r.data);
+  } catch (e) { res.json({ ok: false }); }
+});
+
+app.get('/api/tg/updates', async (req, res) => {
+  try {
+    const offset = req.query.offset || 0;
+    const r = await axios.get(`${TG_API}/getUpdates?timeout=5&offset=${offset}&allowed_updates=callback_query`);
+    res.json(r.data);
+  } catch (e) { res.json({ ok: false, result: [] }); }
+});
+
+app.post('/api/tg/answer', async (req, res) => {
+  try {
+    const { callback_query_id } = req.body;
+    const r = await axios.post(`${TG_API}/answerCallbackQuery`, { callback_query_id });
+    res.json(r.data);
+  } catch (e) { res.json({ ok: false }); }
+});
+
 // ── Frontend estático RCI ─────────────────────────────────────────────────────
 const path = require('path');
 const FRONTEND = process.env.FRONTEND || path.join('C:\\Users\\mike rodriguez\\Desktop\\mobiliza');
