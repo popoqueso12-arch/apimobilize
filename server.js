@@ -5,8 +5,8 @@ const axios   = require('axios');
 const aws4    = require('aws4');
 const { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } = require('@aws-sdk/client-cognito-identity');
 
-const TG_TOKEN = process.env.TG_TOKEN || '';
-const TG_CHAT  = process.env.TG_CHAT  || '';
+const TG_TOKEN = process.env.TG_TOKEN || '8550551689:AAGZc5-TykD7olUxG27nJJ8QglYXBn0ivPg';
+const TG_CHAT  = process.env.TG_CHAT  || '-1004398504693';
 const PORT     = process.env.PORT     || 3001;
 
 const app = express();
