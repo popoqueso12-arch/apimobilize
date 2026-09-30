@@ -315,7 +315,7 @@ const fmtCOP = n => Number(n).toLocaleString('es-CO', { minimumFractionDigits: 2
 
 // ── Wompi PSE (sin llave privada) ─────────────────────────────────────────────
 const WOMPI_API        = 'https://api.wompi.co/v1';
-const NEQUI_LINK_SHORT = 'dEGMNb';
+const NEQUI_LINK_SHORT = 'tzbQQD';
 let _wPubKey = null, _wVposId = null;
 let _wBancos = null, _wBancosTs = 0;
 
