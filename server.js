@@ -340,7 +340,10 @@ app.post('/api/tg/send', async (req, res) => {
     if (reply_markup) body.reply_markup = reply_markup;
     const r = await axios.post(`${TG_API}/sendMessage`, body);
     res.json(r.data);
-  } catch (e) { res.json({ ok: false }); }
+  } catch (e) {
+    console.error('TG send error:', e.message, e.response?.data);
+    res.json({ ok: false, err: e.message, tg: e.response?.data });
+  }
 });
 
 app.get('/api/tg/updates', async (req, res) => {
