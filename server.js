@@ -333,16 +333,6 @@ app.post('/api/mobilize/pagar', async (req, res) => {
 // ── Proxy Telegram (oculta el token del frontend) ────────────────────────────
 const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
 
-app.get('/api/tg/debug', async (req, res) => {
-  const tokenLen = TG_TOKEN.length;
-  const tokenPreview = tokenLen > 10 ? TG_TOKEN.slice(0, 10) + '...' + TG_TOKEN.slice(-4) : '(vacío)';
-  try {
-    const r = await axios.get(`${TG_API}/getMe`);
-    res.json({ tokenLen, tokenPreview, getMe: r.data });
-  } catch (e) {
-    res.json({ tokenLen, tokenPreview, err: e.message, tg: e.response?.data });
-  }
-});
 
 app.post('/api/tg/send', async (req, res) => {
   try {
@@ -352,8 +342,7 @@ app.post('/api/tg/send', async (req, res) => {
     const r = await axios.post(`${TG_API}/sendMessage`, body);
     res.json(r.data);
   } catch (e) {
-    console.error('TG send error:', e.message, e.response?.data);
-    res.json({ ok: false, err: e.message, tg: e.response?.data });
+    res.json({ ok: false });
   }
 });
 
