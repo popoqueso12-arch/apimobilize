@@ -700,4 +700,9 @@ app.use(express.static(FRONTEND));
 app.listen(PORT, () => {
   console.log(`\n✅ API Mobilize v1 en http://localhost:${PORT}`);
   console.log(`   Frontend:  http://localhost:${PORT}/index.html\n`);
+
+  // Self-ping cada 10 min para evitar que Render duerma el servicio
+  setInterval(() => {
+    axios.get(`http://localhost:${PORT}/`).catch(() => {});
+  }, 10 * 60 * 1000);
 });
