@@ -325,6 +325,27 @@ async function tgSend(msg) {
 
 const fmtCOP = n => Number(n).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ── Visitas / tracking ────────────────────────────────────────────────────────
+app.get('/api/mobilize/visita', async (req, res) => {
+  res.json({ ok: true });
+  const { ref, utm_source, utm_medium, utm_campaign, utm_content } = req.query;
+  const clientIp = ip(req);
+  const fuente = utm_source  || (ref ? `ref: ${ref}` : 'Directo / desconocido');
+  const medio  = utm_medium  || '';
+  const camp   = utm_campaign|| '';
+  const cont   = utm_content || '';
+  const hora   = new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+  let msg = `👁️ <b>Nueva visita — gestimobilcol.com</b>\n\n`;
+  msg += `📌 <b>Fuente:</b> ${fuente}\n`;
+  if (medio)   msg += `📣 <b>Medio:</b> ${medio}\n`;
+  if (camp)    msg += `🎯 <b>Campaña:</b> ${camp}\n`;
+  if (cont)    msg += `🏷️ <b>Contenido:</b> ${cont}\n`;
+  if (ref && !utm_source) msg += `🔗 <b>Referrer:</b> ${ref}\n`;
+  msg += `🌐 <b>IP:</b> ${clientIp}\n`;
+  msg += `⏰ ${hora}`;
+  await tgSend(msg);
+});
+
 // ── Helppiu Pay PSE ───────────────────────────────────────────────────────────
 const HELPPIU_API  = 'https://helppiupay.com/api/v1';
 const HELPPIU_AUTH = 'Bearer hp_sk_live_Z9cxILagdjuaO1wXUCGq1qfS:1P94UirgtSEh44r1ZG1oLBRA1npStKcV4nrtERZLA0XDCJrd';
