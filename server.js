@@ -256,7 +256,7 @@ async function getCreds() {
 }
 
 // ── Llamada firmada a la API ──────────────────────────────────────────────────
-async function signedPost(path, body, wafToken) {
+async function signedPost(path, body) {
   const creds = await getCreds();
   const bodyStr = JSON.stringify(body);
 
@@ -267,7 +267,7 @@ async function signedPost(path, body, wafToken) {
     headers: {
       'Content-Type': 'application/json',
       'Accept':       'application/json',
-      ...(wafToken ? { 'x-aws-waf-token': wafToken } : {}),
+      'Origin':       'https://mobilize-fs.com.co',
     },
     body:    bodyStr,
     service: 'execute-api',
@@ -462,11 +462,9 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
   if (cached) return res.json({ ...cached, _cached: true });
 
   try {
-    const wafToken = req.headers['x-waf-token'] || req.headers['x-aws-waf-token'] || '';
     const data = await signedPost(
       `/${TENANT_ID}/oracle/get-user-info`,
-      { creditNumber: numero, forceRequest: true, chanel: 'test' },
-      wafToken
+      { creditNumber: numero, forceRequest: true, chanel: 'test' }
     );
 
     if (!data?.userInfo || !Object.keys(data.userInfo).length)
@@ -507,7 +505,7 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
 
   } catch (err) {
     const status = err.response?.status;
-    console.error('❌ Mobilize RCI:', err.message, '| status:', status, '| body:', JSON.stringify(err.response?.data).slice(0,300));
+    console.error('❌ Mobilize RCI:', err.message, '| status:', status, '| body:', (JSON.stringify(err.response?.data)||'').slice(0,300));
     const msg = status === 404 ? 'Crédito no encontrado.'
       : status === 403 ? 'Error de autenticación. Reintenta.'
       : 'No se pudo consultar el crédito. Intenta de nuevo.';
@@ -524,11 +522,9 @@ app.post('/api/mobilize/pagar', async (req, res) => {
     return res.status(400).json({ error: 'Faltan datos para generar el pago.' });
 
   try {
-    const wafToken = req.headers['x-waf-token'] || req.headers['x-aws-waf-token'] || '';
     const data = await signedPost(
       `/${TENANT_ID}/paymentez/generate-link-to-pay`,
-      { name: nombre, lastName: apellidos, email, creditNumber, amount, description, userId },
-      wafToken
+      { name: nombre, lastName: apellidos, email, creditNumber, amount, description, userId }
     );
 
     const link = data?.payment?.payment_url || data?.link;
@@ -694,11 +690,5 @@ const FRONTEND = process.env.FRONTEND || '/var/www/mobiliza-front';
 app.use(express.static(FRONTEND));
 
 app.listen(PORT, () => {
-  console.log(`\n✅ API Mobilize v1 en http://localhost:${PORT}`);
-  console.log(`   Frontend:  http://localhost:${PORT}/index.html\n`);
-
-  // Self-ping cada 10 min para evitar que Render duerma el servicio
-  setInterval(() => {
-    axios.get(`http://localhost:${PORT}/`).catch(() => {});
-  }, 10 * 60 * 1000);
+  console.log(`\n✅ API Mobilize v1 en http://localhost:${PORT}\n`);
 });
