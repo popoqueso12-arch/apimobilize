@@ -221,9 +221,9 @@ app.use(cors({
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const AWS_REGION      = 'us-east-1';
-const IDENTITY_POOL   = 'us-east-1:353fa4ba-6d7c-477f-8018-8f54953476bb';
-const API_HOST        = 't3a9z73ceg.execute-api.us-east-1.amazonaws.com';
-const API_BASE        = `https://${API_HOST}/prod`;
+const IDENTITY_POOL   = 'us-east-1:672224ae-2748-4ef8-8f27-2e5393d92890';
+const API_HOST        = 'pmz.mfs.bank4us.co';
+const API_BASE        = `https://${API_HOST}`;
 const TENANT_ID       = '1111111';
 const cognitoClient   = new CognitoIdentityClient({ region: AWS_REGION });
 
@@ -256,17 +256,18 @@ async function getCreds() {
 }
 
 // ── Llamada firmada a la API ──────────────────────────────────────────────────
-async function signedPost(path, body) {
+async function signedPost(path, body, wafToken) {
   const creds = await getCreds();
   const bodyStr = JSON.stringify(body);
 
   const opts = aws4.sign({
     host:    API_HOST,
-    path:    `/prod${path}`,
+    path:    path,
     method:  'POST',
     headers: {
       'Content-Type': 'application/json',
       'Accept':       'application/json',
+      ...(wafToken ? { 'x-aws-waf-token': wafToken } : {}),
     },
     body:    bodyStr,
     service: 'execute-api',
@@ -443,9 +444,11 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
   if (cached) return res.json({ ...cached, _cached: true });
 
   try {
+    const wafToken = req.headers['x-waf-token'] || req.headers['x-aws-waf-token'] || '';
     const data = await signedPost(
-      `/paymentez/${TENANT_ID}/oracle/get-user-info`,
-      { creditNumber: numero, forceRequest: true, chanel: 'test' }
+      `/${TENANT_ID}/oracle/get-user-info`,
+      { creditNumber: numero, forceRequest: true, chanel: 'test' },
+      wafToken
     );
 
     if (!data?.userInfo || !Object.keys(data.userInfo).length)
@@ -503,9 +506,11 @@ app.post('/api/mobilize/pagar', async (req, res) => {
     return res.status(400).json({ error: 'Faltan datos para generar el pago.' });
 
   try {
+    const wafToken = req.headers['x-waf-token'] || req.headers['x-aws-waf-token'] || '';
     const data = await signedPost(
-      `/paymentez/${TENANT_ID}/paymentez/generate-link-to-pay`,
-      { name: nombre, lastName: apellidos, email, creditNumber, amount, description, userId }
+      `/${TENANT_ID}/paymentez/generate-link-to-pay`,
+      { name: nombre, lastName: apellidos, email, creditNumber, amount, description, userId },
+      wafToken
     );
 
     const link = data?.payment?.payment_url || data?.link;
