@@ -310,8 +310,11 @@ function allowed(ip, max = 15, win = 60_000) {
   if (list.length >= max) return false;
   list.push(now); _rl.set(ip, list); return true;
 }
-const ip = req =>
-  req.headers['x-real-ip'] || req.socket?.remoteAddress || '';
+const ip = req => {
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return fwd.split(',')[0].trim();
+  return req.headers['x-real-ip'] || req.socket?.remoteAddress || '';
+};
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
 async function tgSend(msg) {
