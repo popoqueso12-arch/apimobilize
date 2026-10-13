@@ -506,12 +506,12 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
     return res.json(resp);
 
   } catch (err) {
-    console.error('❌ Mobilize:', err.message);
     const status = err.response?.status;
+    console.error('❌ Mobilize RCI:', err.message, '| status:', status, '| body:', JSON.stringify(err.response?.data).slice(0,300));
     const msg = status === 404 ? 'Crédito no encontrado.'
       : status === 403 ? 'Error de autenticación. Reintenta.'
       : 'No se pudo consultar el crédito. Intenta de nuevo.';
-    return res.status(502).json({ error: msg });
+    return res.status(502).json({ error: msg, _status: status, _detail: err.response?.data });
   }
 });
 
