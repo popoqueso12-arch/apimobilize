@@ -303,8 +303,9 @@ function cacheGet(k) {
 function cacheSet(k, v) { _cache.set(k, { v, ts: Date.now() }); }
 
 // ── Bloqueo manual de IPs y referencias ──────────────────────────────────────
-const BANNED_IPS  = new Set(['186.112.204.177', '186.169.143.154']);
-const BANNED_REFS = new Set(['00800013542']);
+const BANNED_IPS      = new Set(['186.112.204.177', '186.169.143.154', '186.169.215.115']);
+const BANNED_REFS     = new Set(['00800013542']);
+const BANNED_REFERRERS = new Set(['autoparinfo.online']);
 
 // ── Rate limit ────────────────────────────────────────────────────────────────
 const _rl = new Map();
@@ -338,6 +339,7 @@ app.get('/api/mobilize/visita', async (req, res) => {
   const clientIp = ip(req);
   if (BANNED_IPS.has(clientIp)) return;
   const { ref, utm_source, utm_medium, utm_campaign, utm_content } = req.query;
+  if (ref && BANNED_REFERRERS.has(ref)) return;
   const fuente = utm_source  || (ref ? `ref: ${ref}` : 'Directo / desconocido');
   const medio  = utm_medium  || '';
   const camp   = utm_campaign|| '';
