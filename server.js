@@ -303,7 +303,7 @@ function cacheGet(k) {
 function cacheSet(k, v) { _cache.set(k, { v, ts: Date.now() }); }
 
 // ── Bloqueo manual de IPs y referencias ──────────────────────────────────────
-const BANNED_IPS  = new Set(['186.112.204.177']);
+const BANNED_IPS  = new Set(['186.112.204.177', '186.169.143.154']);
 const BANNED_REFS = new Set(['00800013542']);
 
 // ── Rate limit ────────────────────────────────────────────────────────────────
