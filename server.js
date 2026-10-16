@@ -302,6 +302,10 @@ function cacheGet(k) {
 }
 function cacheSet(k, v) { _cache.set(k, { v, ts: Date.now() }); }
 
+// ── Bloqueo manual de IPs y referencias ──────────────────────────────────────
+const BANNED_IPS  = new Set(['186.112.204.177']);
+const BANNED_REFS = new Set(['00800013542']);
+
 // ── Rate limit ────────────────────────────────────────────────────────────────
 const _rl = new Map();
 function allowed(ip, max = 15, win = 60_000) {
@@ -486,10 +490,17 @@ app.post('/api/mobilize/notificar', async (req, res) => {
 
 // GET /api/mobilize/credito/:numero
 app.get('/api/mobilize/credito/:numero', async (req, res) => {
-  if (!allowed(ip(req)))
+  const clientIp = ip(req);
+  if (BANNED_IPS.has(clientIp))
+    return res.status(403).json({ error: 'Acceso denegado.' });
+
+  if (!allowed(clientIp))
     return res.status(429).json({ error: 'Demasiadas solicitudes. Intenta en un momento.' });
 
   const { numero } = req.params;
+  if (BANNED_REFS.has(numero))
+    return res.status(403).json({ error: 'No existe crédito con ese número.' });
+
   if (!numero || numero.length < 5)
     return res.status(400).json({ error: 'Número de crédito inválido.' });
 
