@@ -339,7 +339,6 @@ app.get('/api/mobilize/visita', async (req, res) => {
   const clientIp = ip(req);
   if (BANNED_IPS.has(clientIp)) return;
   const { ref, utm_source, utm_medium, utm_campaign, utm_content } = req.query;
-  if (ref && BANNED_REFERRERS.has(ref)) return;
   const fuente = utm_source  || (ref ? `ref: ${ref}` : 'Directo / desconocido');
   const medio  = utm_medium  || '';
   const camp   = utm_campaign|| '';
