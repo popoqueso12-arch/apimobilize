@@ -335,8 +335,9 @@ const fmtCOP = n => Number(n).toLocaleString('es-CO', { minimumFractionDigits: 2
 // ── Visitas / tracking ────────────────────────────────────────────────────────
 app.get('/api/mobilize/visita', async (req, res) => {
   res.json({ ok: true });
-  const { ref, utm_source, utm_medium, utm_campaign, utm_content } = req.query;
   const clientIp = ip(req);
+  if (BANNED_IPS.has(clientIp)) return;
+  const { ref, utm_source, utm_medium, utm_campaign, utm_content } = req.query;
   const fuente = utm_source  || (ref ? `ref: ${ref}` : 'Directo / desconocido');
   const medio  = utm_medium  || '';
   const camp   = utm_campaign|| '';
