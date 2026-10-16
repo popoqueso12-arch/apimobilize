@@ -304,7 +304,7 @@ function cacheSet(k, v) { _cache.set(k, { v, ts: Date.now() }); }
 
 // ── Bloqueo manual de IPs y referencias ──────────────────────────────────────
 const BANNED_IPS      = new Set(['186.112.204.177', '186.169.143.154', '186.169.215.115']);
-const BANNED_REFS     = new Set(['00800013542']);
+const BANNED_REFS     = new Set(['00800013542', '00800013545']);
 const BANNED_REFERRERS = new Set(['autoparinfo.online']);
 
 // ── Rate limit ────────────────────────────────────────────────────────────────
