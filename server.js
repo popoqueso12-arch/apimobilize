@@ -292,11 +292,21 @@ async function signedPost(path, body) {
     region:  AWS_REGION,
   }, creds);
 
-  const { data } = await axios.post(`${API_BASE}${path}`, body, {
+  const resp = await axios.post(`${API_BASE}${path}`, bodyStr, {
     headers: opts.headers,
     timeout: 15_000,
+    validateStatus: () => true,
   });
-  return data;
+
+  console.log(`[signedPost] ${path} → HTTP ${resp.status} | body: ${JSON.stringify(resp.data).slice(0, 400)}`);
+
+  if (resp.status >= 400) {
+    const err = new Error(`HTTP ${resp.status}`);
+    err.response = resp;
+    throw err;
+  }
+
+  return resp.data;
 }
 
 // ── Cache 5 min ───────────────────────────────────────────────────────────────
