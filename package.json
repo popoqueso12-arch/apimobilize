@@ -2,7 +2,8 @@
   "name": "api-mobilize",
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity": "^3.600.0",
