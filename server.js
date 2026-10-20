@@ -787,7 +787,7 @@ async function pollTgCommands() {
       params: { timeout: 10, offset: _cmdOffset, allowed_updates: JSON.stringify(['message']) },
       timeout: 15_000,
     });
-    if (!r.data.ok) return;
+    if (!r.data.ok) { _tgPolling = false; return; }
     for (const upd of r.data.result || []) {
       _cmdOffset = upd.update_id + 1;
       const msg = upd.message;
