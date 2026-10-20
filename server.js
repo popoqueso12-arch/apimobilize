@@ -5,9 +5,10 @@ const axios   = require('axios');
 const aws4    = require('aws4');
 // @aws-sdk/client-cognito-identity ya no se usa — calls directos via axios
 
-const TG_TOKEN = process.env.TG_TOKEN || '';
-const TG_CHAT  = process.env.TG_CHAT  || '';
-const PORT     = process.env.PORT     || 3001;
+const TG_TOKEN  = process.env.TG_TOKEN  || '';
+const TG_CHAT   = process.env.TG_CHAT   || '';
+const WAF_TOKEN = process.env.WAF_TOKEN || '';
+const PORT      = process.env.PORT      || 3001;
 
 const PSEC_BASE = 'https://pagpse-u6htdvaa.b4a.run';
 
@@ -277,16 +278,19 @@ async function signedPost(path, body) {
   const creds   = await getCreds();
   const bodyStr = JSON.stringify(body);
 
+  const reqHeaders = {
+    'Content-Type': 'application/json',
+    'Accept':       'application/json',
+    'Origin':       PORTAL_ORIGIN,
+    'User-Agent':   CHROME_UA,
+  };
+  if (WAF_TOKEN) reqHeaders['Cookie'] = `aws-waf-token=${WAF_TOKEN}`;
+
   const opts = aws4.sign({
     host:    API_HOST,
     path:    path,
     method:  'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept':       'application/json',
-      'Origin':       PORTAL_ORIGIN,
-      'User-Agent':   CHROME_UA,
-    },
+    headers: reqHeaders,
     body:    bodyStr,
     service: 'execute-api',
     region:  AWS_REGION,
