@@ -3,14 +3,23 @@ const express    = require('express');
 const cors       = require('cors');
 const axios      = require('axios');
 const aws4       = require('aws4');
-const puppeteer = require('puppeteer');
-// @aws-sdk/client-cognito-identity ya no se usa — calls directos via axios
 
-const TG_TOKEN  = process.env.TG_TOKEN  || '';
-const TG_CHAT   = process.env.TG_CHAT   || '';
-const PORT      = process.env.PORT      || 3001;
+const TG_TOKEN        = process.env.TG_TOKEN        || '';
+const TG_CHAT         = process.env.TG_CHAT         || '';
+const TWOCAPTCHA_KEY  = process.env.TWOCAPTCHA_KEY  || '';
+const PORT            = process.env.PORT            || 3001;
 
-// ── Token WAF auto-refresh via Puppeteer ──────────────────────────────────────
+// ── Config ────────────────────────────────────────────────────────────────────
+const AWS_REGION    = 'us-east-1';
+const IDENTITY_POOL = 'us-east-1:672224ae-2748-4ef8-8f27-2e5393d92890';
+const API_HOST      = 'pmz.mfs.bank4us.co';
+const API_BASE      = `https://${API_HOST}`;
+const TENANT_ID     = '1111111';
+const PORTAL_ORIGIN = 'https://www.mobilize-fs.com.co';
+const CHROME_UA     = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const COGNITO_BASE  = 'https://cognito-identity.us-east-1.amazonaws.com/';
+
+// ── Token WAF auto-refresh via 2captcha ───────────────────────────────────────
 let _wafToken        = '';
 let _wafTokenExpiry  = 0;
 let _wafRefreshing   = false;
@@ -20,33 +29,75 @@ async function refreshWafToken() {
   if (_wafRefreshing) return;
   _wafRefreshing = true;
   try {
-    console.log('[WAF] Obteniendo token via Puppeteer...');
-    const browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
-    });
-    const page = await browser.newPage();
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-    await page.goto('https://www.mobilize-fs.com.co/portal-pagos/', {
-      waitUntil: 'domcontentloaded', timeout: 30_000,
-    });
-    await new Promise(r => setTimeout(r, 8_000));
-    const cookies = await page.cookies('https://www.mobilize-fs.com.co');
-    await browser.close();
-    const found = cookies.find(c => c.name === 'aws-waf-token');
-    if (found) {
-      _wafToken       = found.value;
-      _wafTokenExpiry = Date.now() + 25 * 60 * 1000; // refrescar cada 25 min
-      console.log('[WAF] Token renovado OK:', _wafToken.slice(0, 40));
-    } else {
-      console.warn('[WAF] No se encontró aws-waf-token en cookies');
+    if (!TWOCAPTCHA_KEY) { _wafLastError = 'TWOCAPTCHA_KEY no configurada'; return; }
+    console.log('[WAF] Obteniendo token via 2captcha...');
+
+    // 1. Obtener parámetros CAPTCHA del endpoint
+    const paramResp = await axios.post(
+      `https://${API_HOST}/${TENANT_ID}/oracle/get-user-info`,
+      JSON.stringify({ creditNumber: 'test', forceRequest: false, chanel: 'test' }),
+      { headers: { 'Content-Type': 'application/json', 'User-Agent': CHROME_UA },
+        validateStatus: () => true, timeout: 10_000 }
+    );
+    const html = typeof paramResp.data === 'string' ? paramResp.data : '';
+    if (!html.includes('gokuProps')) {
+      _wafLastError = `No hay params CAPTCHA (HTTP ${paramResp.status})`;
+      console.warn('[WAF]', _wafLastError);
+      return;
     }
+
+    const iv              = html.match(/"iv"\s*:\s*"([^"]+)"/)?.[1];
+    const context         = html.match(/"context"\s*:\s*"([^"]+)"/)?.[1];
+    const challengeScript = html.match(/src="(https:\/\/[^"]+challenge\.js[^"]*)"/)?.[1];
+    const captchaScript   = html.match(/src="(https:\/\/[^"]+captcha\.js[^"]*)"/)?.[1];
+    const sitekey         = challengeScript?.match(/\/\/([\w]+)\./)?.[1];
+
+    if (!iv || !context || !sitekey) {
+      _wafLastError = 'Params WAF incompletos: ' + JSON.stringify({ iv: !!iv, context: !!context, sitekey });
+      console.warn('[WAF]', _wafLastError);
+      return;
+    }
+
+    // 2. Crear tarea en 2captcha
+    const createResp = await axios.post('https://api.2captcha.com/createTask', {
+      clientKey: TWOCAPTCHA_KEY,
+      task: {
+        type: 'AmazonTaskProxyless',
+        websiteURL: `https://${API_HOST}/${TENANT_ID}/oracle/get-user-info`,
+        websiteKey: sitekey,
+        iv, context, challengeScript, captchaScript,
+      },
+    }, { timeout: 15_000 });
+
+    if (createResp.data.errorId !== 0)
+      throw new Error('2captcha createTask: ' + JSON.stringify(createResp.data));
+
+    const taskId = createResp.data.taskId;
+    console.log('[WAF] 2captcha task', taskId, '- esperando...');
+
+    // 3. Polling hasta obtener token (máx 2.5 min)
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 5_000));
+      const poll = await axios.post('https://api.2captcha.com/getTaskResult',
+        { clientKey: TWOCAPTCHA_KEY, taskId }, { timeout: 10_000 });
+      if (poll.data.status === 'ready') {
+        const tok = poll.data.solution?.existing_token;
+        if (tok) {
+          _wafToken       = tok;
+          _wafTokenExpiry = Date.now() + 25 * 60 * 1000;
+          _wafLastError   = '';
+          console.log('[WAF] Token 2captcha OK:', tok.slice(0, 40));
+          return;
+        }
+        throw new Error('2captcha: sin existing_token en solución');
+      }
+      if (poll.data.errorId !== 0)
+        throw new Error('2captcha polling: ' + JSON.stringify(poll.data));
+    }
+    throw new Error('2captcha timeout tras 2.5 min');
   } catch (e) {
     _wafLastError = e.message;
-    console.error('[WAF] Error al obtener token:', e.message);
+    console.error('[WAF] Error:', e.message);
   } finally {
     _wafRefreshing = false;
   }
@@ -274,16 +325,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Config ────────────────────────────────────────────────────────────────────
-const AWS_REGION    = 'us-east-1';
-const IDENTITY_POOL = 'us-east-1:672224ae-2748-4ef8-8f27-2e5393d92890';
-const API_HOST      = 'pmz.mfs.bank4us.co';
-const API_BASE      = `https://${API_HOST}`;
-const TENANT_ID     = '1111111';
-const PORTAL_ORIGIN = 'https://www.mobilize-fs.com.co';
-const CHROME_UA     = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const COGNITO_BASE  = 'https://cognito-identity.us-east-1.amazonaws.com/';
-
 // ── Credenciales Cognito (se renuevan cada ~50min) ────────────────────────────
 let _creds = null;
 let _credsExpiry = 0;
@@ -329,7 +370,6 @@ async function signedPost(path, body) {
   const reqHeaders = {
     'Content-Type': 'application/json',
     'Accept':       'application/json',
-    'Origin':       PORTAL_ORIGIN,
     'User-Agent':   CHROME_UA,
   };
   if (wafTok) reqHeaders['Cookie'] = `aws-waf-token=${wafTok}`;
@@ -352,9 +392,12 @@ async function signedPost(path, body) {
 
   console.log(`[signedPost] ${path} → HTTP ${resp.status}`);
 
-  // Si el WAF bloquea, forzar refresh y reintentar una vez
-  if (resp.status === 403 && JSON.stringify(resp.data).includes('WAF')) {
-    console.warn('[WAF] Token rechazado, forzando refresh...');
+  // 405 HTML = WAF pide CAPTCHA. 403 GW_WAF_FILTERED = token inválido.
+  const isWafBlock = resp.status === 405 ||
+    (resp.status === 403 && JSON.stringify(resp.data).includes('WAF'));
+
+  if (isWafBlock) {
+    console.warn('[WAF] Bloqueado, forzando refresh 2captcha...');
     _wafTokenExpiry = 0;
     const newTok = await getWafToken();
     if (newTok) reqHeaders['Cookie'] = `aws-waf-token=${newTok}`;
