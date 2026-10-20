@@ -3,7 +3,7 @@ const express    = require('express');
 const cors       = require('cors');
 const axios      = require('axios');
 const aws4       = require('aws4');
-const puppeteer  = require('puppeteer');
+const puppeteer = require('puppeteer');
 // @aws-sdk/client-cognito-identity ya no se usa — calls directos via axios
 
 const TG_TOKEN  = process.env.TG_TOKEN  || '';
@@ -24,10 +24,7 @@ async function refreshWafToken() {
     const browser = await puppeteer.launch({
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox', '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled',
-      ],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
     });
     const page = await browser.newPage();
     await page.evaluateOnNewDocument(() => {
