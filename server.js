@@ -14,6 +14,7 @@ const PORT      = process.env.PORT      || 3001;
 let _wafToken        = '';
 let _wafTokenExpiry  = 0;
 let _wafRefreshing   = false;
+let _wafLastError    = '';
 
 async function refreshWafToken() {
   if (_wafRefreshing) return;
@@ -47,6 +48,7 @@ async function refreshWafToken() {
       console.warn('[WAF] No se encontró aws-waf-token en cookies');
     }
   } catch (e) {
+    _wafLastError = e.message;
     console.error('[WAF] Error al obtener token:', e.message);
   } finally {
     _wafRefreshing = false;
@@ -603,7 +605,7 @@ app.get('/health', (_, res) =>
     ok: true,
     uptime: Math.floor(process.uptime()),
     cache: _cache.size,
-    waf: _wafToken ? `${_wafToken.slice(0,30)}... (exp in ${Math.round((_wafTokenExpiry-Date.now())/1000)}s)` : 'NO TOKEN',
+    waf: _wafToken ? `OK (exp in ${Math.round((_wafTokenExpiry-Date.now())/1000)}s)` : `NO TOKEN: ${_wafLastError.slice(0,100)}`,
   })
 );
 
