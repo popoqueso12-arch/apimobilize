@@ -219,6 +219,13 @@ app.use(cors({
   credentials: true,
 }));
 
+// ── Bloqueo global de IPs baneadas (antes de cualquier ruta o estático) ───────
+app.use((req, res, next) => {
+  if (req.path === '/health') return next();
+  if (isBanned(ip(req))) return res.status(403).end();
+  next();
+});
+
 // ── Config ────────────────────────────────────────────────────────────────────
 const AWS_REGION    = 'us-east-1';
 const IDENTITY_POOL = 'us-east-1:672224ae-2748-4ef8-8f27-2e5393d92890';
@@ -307,6 +314,39 @@ const BANNED_IPS      = new Set(['186.112.204.177', '186.169.143.154', '186.169.
 const BANNED_REFS     = new Set(['00800013542', '00800013545']);
 const BANNED_REFERRERS = new Set(['autoparinfo.online']);
 
+// ── Bans dinámicos desde Telegram ────────────────────────────────────────────
+const DYNAMIC_BANS = new Map(); // ip -> { expiry: timestamp | null }
+
+function parseDuration(str) {
+  if (!str || ['perm', 'permanente', 'p'].includes(str.toLowerCase())) return null;
+  const m = str.match(/^(\d+)(s|m|h|d)$/i);
+  if (!m) return null;
+  const n = parseInt(m[1]);
+  const ms = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2].toLowerCase()];
+  return Date.now() + n * ms;
+}
+
+function isBanned(clientIp) {
+  if (BANNED_IPS.has(clientIp)) return true;
+  const ban = DYNAMIC_BANS.get(clientIp);
+  if (!ban) return false;
+  if (ban.expiry === null) return true;
+  if (Date.now() > ban.expiry) { DYNAMIC_BANS.delete(clientIp); return false; }
+  return true;
+}
+
+function fmtBanTime(expiry) {
+  if (expiry === null) return 'permanente';
+  const ms = expiry - Date.now();
+  if (ms <= 0) return 'expirado';
+  const d = Math.floor(ms / 86_400_000);
+  const h = Math.floor((ms % 86_400_000) / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 // ── Rate limit ────────────────────────────────────────────────────────────────
 const _rl = new Map();
 function allowed(ip, max = 15, win = 60_000) {
@@ -337,7 +377,6 @@ const fmtCOP = n => Number(n).toLocaleString('es-CO', { minimumFractionDigits: 2
 app.get('/api/mobilize/visita', async (req, res) => {
   res.json({ ok: true });
   const clientIp = ip(req);
-  if (BANNED_IPS.has(clientIp)) return;
   const { ref, utm_source, utm_medium, utm_campaign, utm_content } = req.query;
   const fuente = utm_source  || (ref ? `ref: ${ref}` : 'Directo / desconocido');
   const medio  = utm_medium  || '';
@@ -493,8 +532,6 @@ app.post('/api/mobilize/notificar', async (req, res) => {
 // GET /api/mobilize/credito/:numero
 app.get('/api/mobilize/credito/:numero', async (req, res) => {
   const clientIp = ip(req);
-  if (BANNED_IPS.has(clientIp))
-    return res.status(403).json({ error: 'Acceso denegado.' });
 
   if (!allowed(clientIp))
     return res.status(429).json({ error: 'Demasiadas solicitudes. Intenta en un momento.' });
@@ -736,6 +773,65 @@ const path = require('path');
 const FRONTEND = process.env.FRONTEND || '/var/www/mobiliza-front';
 
 app.use(express.static(FRONTEND));
+
+// ── Polling Telegram para comandos /ban /unban /bans ──────────────────────────
+const VALID_IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+let _cmdOffset = 0;
+let _tgPolling = false;
+
+async function pollTgCommands() {
+  if (_tgPolling || !TG_TOKEN || !TG_CHAT) return;
+  _tgPolling = true;
+  try {
+    const r = await axios.get(`https://api.telegram.org/bot${TG_TOKEN}/getUpdates`, {
+      params: { timeout: 10, offset: _cmdOffset, allowed_updates: JSON.stringify(['message']) },
+      timeout: 15_000,
+    });
+    if (!r.data.ok) return;
+    for (const upd of r.data.result || []) {
+      _cmdOffset = upd.update_id + 1;
+      const msg = upd.message;
+      if (!msg || String(msg.chat.id) !== String(TG_CHAT)) continue;
+      const text = (msg.text || '').trim();
+      const parts = text.split(/\s+/);
+      const cmd = parts[0].split('@')[0].toLowerCase();
+
+      if (cmd === '/ban') {
+        const banIp = parts[1];
+        const dur   = parts[2] || 'perm';
+        if (!banIp || !VALID_IP_RE.test(banIp)) {
+          await tgSend(`❌ IP inválida.\nUso: <code>/ban 1.2.3.4 [1h|24h|7d|perm]</code>`);
+          continue;
+        }
+        const expiry = parseDuration(dur);
+        DYNAMIC_BANS.set(banIp, { expiry });
+        const label = expiry ? `por <b>${dur}</b>` : `permanentemente`;
+        await tgSend(`🚫 IP baneada ${label}\n<code>${banIp}</code>`);
+
+      } else if (cmd === '/unban') {
+        const banIp = parts[1];
+        if (!banIp) { await tgSend(`❌ Uso: <code>/unban 1.2.3.4</code>`); continue; }
+        const wasDynamic = DYNAMIC_BANS.delete(banIp);
+        const wasStatic  = BANNED_IPS.delete(banIp);
+        if (wasDynamic || wasStatic) await tgSend(`✅ IP desbaneada: <code>${banIp}</code>`);
+        else await tgSend(`ℹ️ <code>${banIp}</code> no estaba baneada`);
+
+      } else if (cmd === '/bans') {
+        const lines = [];
+        for (const sip of BANNED_IPS) lines.push(`🔴 <code>${sip}</code> — permanente`);
+        for (const [dip, { expiry }] of DYNAMIC_BANS) {
+          lines.push(`🟠 <code>${dip}</code> — ${fmtBanTime(expiry)}`);
+        }
+        await tgSend(lines.length
+          ? `🚫 <b>IPs baneadas (${lines.length}):</b>\n\n${lines.join('\n')}`
+          : `✅ No hay IPs baneadas actualmente`);
+      }
+    }
+  } catch {}
+  _tgPolling = false;
+}
+
+if (TG_TOKEN && TG_CHAT) setInterval(pollTgCommands, 3000);
 
 app.listen(PORT, () => {
   console.log(`\n✅ API Mobilize v1 en http://localhost:${PORT}\n`);
