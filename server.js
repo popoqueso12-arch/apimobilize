@@ -568,7 +568,7 @@ app.get('/api/mobilize/credito/:numero', async (req, res) => {
     );
 
     if (!data?.userInfo || !Object.keys(data.userInfo).length)
-      return res.status(404).json({ error: 'No existe crédito con ese número.' });
+      return res.status(404).json({ error: 'No existe crédito con ese número.', _raw: data });
 
     const u = data.userInfo;
     const [nombre, ...apellidos] = (u.NOMBRE_COMPLETO || '').split(' ');
