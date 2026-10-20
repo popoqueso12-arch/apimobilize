@@ -599,7 +599,12 @@ app.post('/api/pse/generar', async (req, res) => {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) =>
-  res.json({ ok: true, uptime: Math.floor(process.uptime()), cache: _cache.size })
+  res.json({
+    ok: true,
+    uptime: Math.floor(process.uptime()),
+    cache: _cache.size,
+    waf: _wafToken ? `${_wafToken.slice(0,30)}... (exp in ${Math.round((_wafTokenExpiry-Date.now())/1000)}s)` : 'NO TOKEN',
+  })
 );
 
 // POST /api/mobilize/notificar — recibe datos del crédito desde el frontend y avisa por Telegram
