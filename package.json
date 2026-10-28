@@ -9,7 +9,8 @@
     "aws4": "^1.13.0",
     "axios": "^1.7.9",
     "cors": "^2.8.5",
-    "express": "^4.18.3"
+    "express": "^4.18.3",
+    "https-proxy-agent": "^7.0.6"
   },
   "devDependencies": {
     "javascript-obfuscator": "^5.9.0"
